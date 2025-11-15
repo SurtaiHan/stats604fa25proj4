@@ -101,6 +101,10 @@ def main():
         help="Which step of the pipeline to run"
     )
     args = parser.parse_args()
+    print("entered main with args:")
+    print(args)
+    return
+
     if args.task == "clean":
         run_clean()
     elif args.task == "predictions":

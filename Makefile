@@ -6,28 +6,26 @@ all: analyses
 # Clean: delete intermediate files but keep code and raw data
 .PHONY: clean
 clean:
-	@echo "Cleaning cached files..."
-	rm data/complete_dfs/*
-	rm data/weather/*
+	@echo "Running python main.py clean"
+	python main.py clean
 
 # -------------------------------
 # Run analyses (without downloading raw data or making current predictions)
 .PHONY: analyses
 analyses:
-	@echo "Running all analyses..."
-	python scripts/model_training.py
+	@echo "Running python main.py train"
+	python main.py train
 
 # -------------------------------
 # Make current predictions
 .PHONY: predictions
 predictions:
-	@echo "Generating predictions..."
-	python scripts/make_predictions.py
+	@echo "Running python main.py predictions"
+	python main.py predictions
 
 # -------------------------------
 # Download raw data (delete existing raw data first)
 .PHONY: rawdata
 rawdata:
-	@echo "Refreshing raw data..."
-	rm data/weather/*
-	python scripts/download_raw_data.py
+	@echo "Running python main.py rawdata"
+	python main.py rawdata
