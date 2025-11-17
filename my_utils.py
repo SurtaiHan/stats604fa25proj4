@@ -402,7 +402,27 @@ def getPredictionFeatures(load_area):
     prediction_df = add_features(energy_df, weather_df, dropna=False, outer=True)
 
     start = getMidnight(1)
-    end = getMidnight(2)
+    end = getMidnight(2) - datetime.timedelta(hours=1)
     prediction_df = prediction_df.loc[start:end]
     prediction_df["load_area"] = load_area
+    prediction_df["datetime_beginning_ept"] = prediction_df.index.tz_convert('America/New_York')
+    prediction_df['mw_lag_216'] = prediction_df['mw_lag_216'].fillna(prediction_df['mw_lag_240'])
+    prediction_df['mw_lag_192'] = prediction_df['mw_lag_192'].fillna(prediction_df['mw_lag_216'])
+    prediction_df['mw_lag_168'] = prediction_df['mw_lag_168'].fillna(prediction_df['mw_lag_192'])
+    prediction_df['mw_lag_144'] = prediction_df['mw_lag_144'].fillna(prediction_df['mw_lag_168'])
+    prediction_df['mw_lag_120'] = prediction_df['mw_lag_120'].fillna(prediction_df['mw_lag_144'])
+    prediction_df['mw_lag_96'] = prediction_df['mw_lag_96'].fillna(prediction_df['mw_lag_120'])
+    prediction_df['mw_lag_72'] = prediction_df['mw_lag_72'].fillna(prediction_df['mw_lag_96'])
+
+    prediction_df['temp_rolling_48'] = prediction_df['temp_rolling_48'].fillna(prediction_df['temp_rolling_72'])
+    prediction_df['temp_rolling_24'] = prediction_df['temp_rolling_24'].fillna(prediction_df['temp_rolling_48'])
+
+    prediction_df['temp_lag_216'] = prediction_df['temp_lag_216'].fillna(prediction_df['temp_lag_240'])
+    prediction_df['temp_lag_192'] = prediction_df['temp_lag_192'].fillna(prediction_df['temp_lag_216'])
+    prediction_df['temp_lag_168'] = prediction_df['temp_lag_168'].fillna(prediction_df['temp_lag_192'])
+    prediction_df['temp_lag_144'] = prediction_df['temp_lag_144'].fillna(prediction_df['temp_lag_168'])
+    prediction_df['temp_lag_120'] = prediction_df['temp_lag_120'].fillna(prediction_df['temp_lag_144'])
+    prediction_df['temp_lag_96'] = prediction_df['temp_lag_96'].fillna(prediction_df['temp_lag_120'])
+    prediction_df['temp_lag_72'] = prediction_df['temp_lag_72'].fillna(prediction_df['temp_lag_96'])
+
     return prediction_df

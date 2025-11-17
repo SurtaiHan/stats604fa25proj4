@@ -1,5 +1,5 @@
-# 1. Base Image: Minimal Python image for the required linux/amd64 platform
-FROM python:3.11-slim-buster
+# 1. Base Image: Python image for the required linux/amd64 platform
+FROM python:3.11-bookworm
 
 # 2. Set environment variables
 # Ensures Python output is sent directly to the terminal/logs
@@ -19,9 +19,9 @@ RUN pip install --no-cache-dir -r requirements.text
 # - apt-get update: Refreshes the package list
 # - apt-get install -y make: Installs the utility
 # - rm -rf /var/lib/apt/lists/*: Cleans up the cache immediately to keep the image small
-RUN apt-get update && \
-    apt-get install -y make && \
-    rm -rf /var/lib/apt/lists/*
+#RUN apt-get update && \
+#    apt-get install -y make && \
+#    rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p models data/weather data/complete_dfs data/pjm
 
