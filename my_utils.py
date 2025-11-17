@@ -28,16 +28,18 @@ def getCompleteDfFilePath(load_area):
 def getModelFilePath(load_area):
     filepath = "models/" + load_area + ".pkl"
 
-def makeDirectories():
+def makeDirectories(verbose=False):
     base = pathlib.Path("data")
     subdirs = ["complete_dfs", "pjm", "weather"]
     for sub in subdirs:
         path = base / sub
         path.mkdir(parents=True, exist_ok=True)
-        print(f"Created or already existed: {path}")
+        if verbose:
+            print(f"Created or already existed: {path}")
     path = pathlib.Path("models")
     path.mkdir(parents=True, exist_ok=True)
-    print(f"Created or already existed: {path}")
+    if verbose:
+        print(f"Created or already existed: {path}")
 
 def getLoadAreaToZips():
     # RTO is the *entire PJM footprint*, not a load zone. no meaningful ZIP.

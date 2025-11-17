@@ -2,6 +2,7 @@
 import argparse
 import sys
 import pathlib
+import my_utils
 
 def clear_weather_csvs():
     weather_dir = pathlib.Path("data/weather")
@@ -33,28 +34,31 @@ def clear_complete_csvs():
     print("Finished removing all cached complete dfs")
 
 def clear_models():
-    #fresh_file = pathlib.Path("data/pjm/hrl_load_metered_fresh.csv")
-    #if fresh_file.is_file():
-    #    item.unlink()
-    #    print(f"Deleted cached fresh pjm file: {fresh_file}")
-    #print("Finished removing cached fresh pjm file")
-
-    # TODOOOOOOOOOOOOO
-    pass
+    model_dir = pathlib.Path("data/models")
+    if not model.exists():
+        print("Directory does not exist:", model_dir)
+        return
+    for item in model_dir.iterdir():
+        if item.is_file() and item.suffix.lower() == ".pkl":
+            item.unlink()
+            print(f"Deleted cached model: {item}")
+    print("Finished removing all cached models")
 
 
 def download_weather_csvs():
-    # TODOOOO
-    pass
-
+    my_utils.make_directories()
+    my_utils.getAllWeatherDfs()
 
 def download_fresh_pjm_csv():
-    # TODOOOO
-    pass
+    my_utils.make_directories()
+    # just requesting one particular load_area will trigger
+    # a download if not cached
+    my_utils.getEnergyDf("AECO")
 
 def construct_complete_csvs():
-    # TODO
-    pass
+    my_utils.make_directories()
+    # these are automatically cached like everything else
+    my_utils.getAllCompleteDfs()
 
 
 
@@ -70,9 +74,10 @@ def run_clean():
     print("Finished running make clean")
     
 def run_predictions():
-    print("Running make predictions...")
-
-    print("Finished running make predictions")
+    # Note that this method is sensitive because it must only output
+    # the specific sequence described in the spec
+    # TODOOOOOOOO
+    pass
 
 def run_train():
     print("Running make (e.g. training models)...")
@@ -88,7 +93,6 @@ def run_rawdata():
     download_weather_csvs()
     download_fresh_pjm_csv()
     construct_complete_csvs()
-
     print("Finished running make rawdata")
 
 def main():
@@ -101,9 +105,6 @@ def main():
         help="Which step of the pipeline to run"
     )
     args = parser.parse_args()
-    print("entered main with args:")
-    print(args)
-    return
 
     if args.task == "clean":
         run_clean()
