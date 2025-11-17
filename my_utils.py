@@ -159,7 +159,7 @@ def checkInconsistencies():
 def getYears():
     return range(2018,2026)
 
-def getWeatherDf(load_area, force_refresh=False):
+def getWeatherDf(load_area, force_refresh=False, verbose=False):
     # Create a Nominatim geocoder instance for the desired country (For the USA, use 'us')
     nomi = pgeocode.Nominatim('us')
     years = getYears()
@@ -167,12 +167,11 @@ def getWeatherDf(load_area, force_refresh=False):
     file_path = getWeatherFilePath(load_area)
     if os.path.exists(file_path) and not force_refresh:
         temp = pd.read_csv(file_path)
-        #print(temp.head())
         temp['time'] = pd.to_datetime(temp['time'])
         temp = temp.set_index('time')
-        #print(temp.head())
         if temp.index.min().year == years[0] and temp.index.max().year == years[-1]:
-            print("Cached weather file for " + load_area + " was found")
+            if verbose:
+                print("Cached weather file for " + load_area + " was found")
             return temp
 
     # Query the postal code
@@ -181,8 +180,6 @@ def getWeatherDf(load_area, force_refresh=False):
     location_data = nomi.query_postal_code(zip_code)
     latitude = float(location_data.latitude)
     longitude = float(location_data.longitude)
-    #print(latitude)
-    #print(longitude)
 
     location = Point(latitude, longitude)
     start = datetime.datetime(years[0], 1, 1)
@@ -191,14 +188,15 @@ def getWeatherDf(load_area, force_refresh=False):
     data = Hourly(location, start, end, timezone='UTC').fetch()
     # df.index = df.index.tz_localize('UTC').tz_convert('America/New_York')
     data.to_csv(getWeatherFilePath(load_area))
-    print("Added new cached weather file for " + load_area + " using zip code:" + str(zip_code))
+    if verbose:
+        print("Added new cached weather file for " + load_area + " using zip code:" + str(zip_code))
     return data
 
-def getAllWeatherDfs():
+def getAllWeatherDfs(verbose=False):
     load_area_to_zips = getLoadAreaToZips()
     for key, value in load_area_to_zips.items():
         load_area = key
-        getWeatherDf(load_area)
+        getWeatherDf(load_area, verbose=verbose)
 
 
 def getUSHolidays():
@@ -231,11 +229,12 @@ def isWeekend(datetime_obj):
     return True
 
 # Load PJM data
-def getEnergyDf(load_area, force_refresh=False):
+def getEnergyDf(load_area, force_refresh=False, verbose=False):
     years = getYears()
     load_area_to_zips = getLoadAreaToZips()
     if load_area not in load_area_to_zips.keys():
-        print("Error: load_area(" + load_area + ") not found!")
+        if verbose:
+            print("Error: load_area(" + load_area + ") not found!")
         return -1
 
     ret_df = None
@@ -258,11 +257,14 @@ def getEnergyDf(load_area, force_refresh=False):
             response = requests.get(url)
             response.raise_for_status()  # raises if download failed
             out_path.write_bytes(response.content)
-            print(f"Downloaded fresh pjm csv to: {out_path}")
+            if verbose:
+                print(f"Downloaded fresh pjm csv to: {out_path}")
         else:
-             print("Cached pjm fresh file was found")
-        
-        print("Loading fresh data in addition to historical data")
+            if verbose:
+                print("Cached pjm fresh file was found")
+
+        if verbose:
+            print("Loading fresh data in addition to historical data")
         pjm_df = pd.read_csv(getPjmFreshFilePath())
         pjm_df = pjm_df[pjm_df['load_area'] == load_area]
         if ret_df is None:
@@ -332,6 +334,7 @@ def add_features(energy_df, weather_df, dropna=True, outer=False):
     df['temp_lag_72'] = df['temp'].shift(freq='72h')
     df['temp_lag_96'] = df['temp'].shift(freq='96h')
     df['temp_lag_120'] = df['temp'].shift(freq='120h')
+    df['temp_lag_144'] = df['temp'].shift(freq='144h')
     df['temp_lag_168'] = df['temp'].shift(freq='168h')
     df['temp_lag_192'] = df['temp'].shift(freq='192h')
     df['temp_lag_216'] = df['temp'].shift(freq='216h')
@@ -348,15 +351,15 @@ def add_features(energy_df, weather_df, dropna=True, outer=False):
     df['mw_lag_216'] = df['mw'].shift(freq='216h')
     df['mw_lag_240'] = df['mw'].shift(freq='240h')
 
-    print("Shape before dropna:", df.shape)
+    #print("Shape before dropna:", df.shape)
     # Drop rows where lag features are missing
     if dropna:
         df = df.dropna()
-    print("Shape after dropna:", df.shape)
+    #print("Shape after dropna:", df.shape)
 
     return df
 
-def getCompleteDf(load_area):
+def getCompleteDf(load_area, verbose=False):
     # First check if we have the information cached
     file_path = getCompleteDfFilePath(load_area)
     if os.path.exists(file_path):
@@ -364,22 +367,24 @@ def getCompleteDf(load_area):
         temp['datetime_beginning_utc'] = pd.to_datetime(temp['datetime_beginning_utc'], utc=True)
         temp = temp.set_index('datetime_beginning_utc')
         temp = temp.sort_index()
-        print("Cached complete file for " + load_area + " was found")
+        if verbose:
+            print("Cached complete file for " + load_area + " was found")
         return temp
 
-    energy_df = getEnergyDf(load_area)
-    weather_df = getWeatherDf(load_area)
+    energy_df = getEnergyDf(load_area, verbose=verbose)
+    weather_df = getWeatherDf(load_area, verbose=verbose)
     df_augmented = add_features(energy_df, weather_df)
     # load_area_to_complete_df[load_area] = df_augmented
     df_augmented.to_csv(getCompleteDfFilePath(load_area))
-    print("Added new cached complete file for " + load_area)
+    if verbose:
+        print("Added new cached complete file for " + load_area)
     return df_augmented
 
-def getAllCompleteDfs():
+def getAllCompleteDfs(verbose=False):
     load_area_2_complete_df = {}
     load_area_to_zips = getLoadAreaToZips()
     for load_area in load_area_to_zips.keys():
-        load_area_2_complete_df[load_area] = getCompleteDf(load_area)
+        load_area_2_complete_df[load_area] = getCompleteDf(load_area, verbose)
     return load_area_2_complete_df
 
 # This function gets the EPT midnight and expresses it as UTC
@@ -392,7 +397,7 @@ def getMidnight(num_days):
     return midnight_utc
 
 def getPredictionFeatures(load_area):
-    energy_df = getEnergyDf(load_area)
+    energy_df = getEnergyDf(load_area, force_refresh=True)
     weather_df = getWeatherDf(load_area, force_refresh=True)
     prediction_df = add_features(energy_df, weather_df, dropna=False, outer=True)
 

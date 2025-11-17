@@ -18,7 +18,7 @@ def clear_weather_csvs():
 def clear_fresh_pjm_csv():
     fresh_file = pathlib.Path("data/pjm/hrl_load_metered_fresh.csv")
     if fresh_file.is_file():
-        item.unlink()
+        fresh_file.unlink()
         print(f"Deleted cached fresh pjm file: {fresh_file}")
     print("Finished removing cached fresh pjm file")
 
@@ -34,8 +34,8 @@ def clear_complete_csvs():
     print("Finished removing all cached complete dfs")
 
 def clear_models():
-    model_dir = pathlib.Path("data/models")
-    if not model.exists():
+    model_dir = pathlib.Path("models")
+    if not model_dir.exists():
         print("Directory does not exist:", model_dir)
         return
     for item in model_dir.iterdir():
@@ -46,17 +46,17 @@ def clear_models():
 
 
 def download_weather_csvs():
-    my_utils.make_directories()
+    my_utils.makeDirectories()
     my_utils.getAllWeatherDfs()
 
 def download_fresh_pjm_csv():
-    my_utils.make_directories()
+    my_utils.makeDirectories()
     # just requesting one particular load_area will trigger
     # a download if not cached
     my_utils.getEnergyDf("AECO")
 
 def construct_complete_csvs():
-    my_utils.make_directories()
+    my_utils.makeDirectories()
     # these are automatically cached like everything else
     my_utils.getAllCompleteDfs()
 
