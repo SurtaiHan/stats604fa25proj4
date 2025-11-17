@@ -46,19 +46,19 @@ def clear_models():
 
 
 def download_weather_csvs():
-    my_utils.makeDirectories()
-    my_utils.getAllWeatherDfs()
+    my_utils.makeDirectories(verbose=True)
+    my_utils.getAllWeatherDfs(verbose=True)
 
 def download_fresh_pjm_csv():
-    my_utils.makeDirectories()
+    my_utils.makeDirectories(verbose=True)
     # just requesting one particular load_area will trigger
     # a download if not cached
-    my_utils.getEnergyDf("AECO")
+    my_utils.getEnergyDf("AECO", verbose=True)
 
 def construct_complete_csvs():
-    my_utils.makeDirectories()
+    my_utils.makeDirectories(verbose=True)
     # these are automatically cached like everything else
-    my_utils.getAllCompleteDfs()
+    my_utils.getAllCompleteDfs(verbose=True)
 
 
 

@@ -1,4 +1,9 @@
+pandas
+numpy
+scikit-learn
 meteostat
 holidays
 pgeocode
-
+matplotlib
+seaborn
+joblib

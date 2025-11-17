@@ -1,0 +1,56 @@
+#----------------------------------------------------#
+
+General & OS files to ignore
+
+#----------------------------------------------------#
+.DS_Store             # macOS system file
+.vscode               # VS Code workspace files
+.idea                 # IntelliJ / PyCharm workspace files
+*.swp
+*~
+.dockerignore         # Do not copy the ignore file itself
+
+#----------------------------------------------------#
+
+Python-specific files and directories
+
+#----------------------------------------------------#
+pycache
+*.pyc
+*.pyo
+*.pyd
+
+Temporary files created by various tools
+
+.mypy_cache/
+.pytest_cache/
+.tox/
+.coverage
+
+Build artifacts
+
+dist/
+build/
+*.egg-info/
+
+Ignore virtual environments
+
+venv/
+.venv/
+/env/
+
+#----------------------------------------------------#
+
+Version Control
+
+#----------------------------------------------------#
+.git
+.gitignore
+
+#----------------------------------------------------#
+
+Logs and Runtime Data
+
+#----------------------------------------------------#
+*.log
+tmp/
