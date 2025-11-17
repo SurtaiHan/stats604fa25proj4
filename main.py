@@ -72,17 +72,17 @@ def run_clean():
     clear_complete_csvs()
     clear_models()
     print("Finished running make clean")
-    
-def run_predictions():
-    # Note that this method is sensitive because it must only output
-    # the specific sequence described in the spec
-    # TODOOOOOOOO
-    pass
 
 def run_train():
     print("Running make (e.g. training models)...")
-
+    my_utils.trainAll()
     print("Finished running make (e.g. training models)")
+
+def run_predictions():
+    # Note that this method is sensitive because it must only output
+    # the specific sequence described in the spec
+    #my_utils.predictAll()
+    pass
     
 def run_rawdata():
     print("Running make rawdata...")

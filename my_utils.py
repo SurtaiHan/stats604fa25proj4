@@ -10,6 +10,18 @@ import pathlib
 import holidays
 import zoneinfo
 
+import pickle
+import matplotlib.pyplot as plt
+import seaborn as sns
+import joblib
+import re
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import ElasticNetCV
+from sklearn.metrics import mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+
 def getWeatherFilePath(load_area):
     filepath = "data/weather/" + load_area + ".csv"
     return filepath
@@ -26,7 +38,8 @@ def getCompleteDfFilePath(load_area):
     return filepath
 
 def getModelFilePath(load_area):
-    filepath = "models/" + load_area + ".pkl"
+    filepath = "models/" + load_area + "_rf_model.pkl"
+    return filepath
 
 def makeDirectories(verbose=False):
     base = pathlib.Path("data")
@@ -426,3 +439,411 @@ def getPredictionFeatures(load_area):
     prediction_df['temp_lag_72'] = prediction_df['temp_lag_72'].fillna(prediction_df['temp_lag_96'])
 
     return prediction_df
+
+
+
+
+
+def get_feature_names_from_ct(preprocessor, cat_cols, num_cols):
+    """
+    Given a ColumnTransformer with:
+      ("num", ..., num_cols)
+      ("cat", OneHotEncoder, cat_cols)
+    return the full list of feature names in the order seen by the model.
+    """
+    num_feature_names = list(num_cols)
+
+    cat_encoder = preprocessor.named_transformers_["cat"]
+    cat_feature_names = []
+    for col_name, cats in zip(cat_cols, cat_encoder.categories_):
+        for cat in cats:
+            cat_feature_names.append(f"{col_name}={cat}")
+
+    return num_feature_names + cat_feature_names
+
+
+
+def save_rf_weights_pickle(rf_pipeline, cat_cols, num_cols, prefix):
+    """
+    rf_pipeline: Pipeline([('prep', ...), ('rf', RandomForestRegressor(...))])
+    Saves:
+      - {prefix}_rf_importances.csv
+      - {prefix}_rf_model.pkl        <-- pickle instead of joblib
+    """
+    os.makedirs(os.path.dirname(prefix), exist_ok=True)
+
+    prep = rf_pipeline.named_steps["prep"]
+    rf = rf_pipeline.named_steps["rf"]
+
+    feature_names = get_feature_names_from_ct(prep, cat_cols, num_cols)
+    importances = rf.feature_importances_
+
+    imp_df = pd.DataFrame({"feature": feature_names, "importance": importances})
+    imp_df = imp_df.sort_values("importance", ascending=False)
+    imp_df.to_csv(f"{prefix}_rf_importances.csv", index=False)
+
+    # Save full pipeline as pickle
+    with open(f"{prefix}_rf_model.pkl", "wb") as f:
+        pickle.dump(rf_pipeline, f)
+
+def split_time_series_with_gaps_df(
+    df,
+    time_col="datetime_beginning_utc",
+    covid_exclude=("2020-03-15 00:00:00", "2020-06-30 23:59:59"),  # set to None to keep all rows
+    train_frac=0.70,
+    val_frac=0.15,
+    gap_hours=168,
+):
+    """
+    Train | gap | Val | gap | Test split that AUTO-matches your time format.
+
+    - If your column is tz-naive (dtype datetime64[ns]), we keep everything naive
+      and create naive cutoff timestamps.
+    - If your column is tz-aware, we convert to UTC and use UTC-aware cutoffs.
+
+    Returns: train_df, val_df, test_df, summary_dict
+    """
+
+    d = df.copy()
+
+    # --- Ensure datetime type; do not force timezone yet ---
+    if not pd.api.types.is_datetime64_any_dtype(d[time_col]):
+        d[time_col] = pd.to_datetime(d[time_col], errors="coerce")
+
+    # Detect tz awareness
+    is_tz_aware = pd.api.types.is_datetime64tz_dtype(d[time_col])
+
+    # Normalize to one consistent timeline
+    if is_tz_aware:
+        # Keep tz-aware; convert everything to UTC for clean math
+        d[time_col] = d[time_col].dt.tz_convert("UTC")
+        # Helper to build UTC-aware cutoffs
+        def _ts(s): return pd.Timestamp(s, tz="UTC")
+    else:
+        # Keep naive timeline (no tz)
+        d[time_col] = d[time_col].dt.tz_localize(None)
+        # Helper to build naive cutoffs
+        def _ts(s): return pd.Timestamp(s)
+
+    d = d.dropna(subset=[time_col]).sort_values(time_col).reset_index(drop=True)
+
+    # --- Exclude peak-COVID (optional) ---
+    if covid_exclude is not None:
+        covid_start = _ts(covid_exclude[0])
+        covid_end   = _ts(covid_exclude[1])
+        mask_covid = (d[time_col] >= covid_start) & (d[time_col] <= covid_end)
+        d = d.loc[~mask_covid].copy()
+
+    # --- Compute boundaries with gaps ---
+    gap = pd.Timedelta(hours=gap_hours)
+    tmin, tmax = d[time_col].min(), d[time_col].max()
+    total_span = tmax - tmin
+    eff_span = total_span - 2 * gap
+    if eff_span <= pd.Timedelta(0):
+        raise ValueError("Time span too short for the requested gaps. Increase range or reduce gap_hours.")
+
+    train_end = tmin + eff_span * train_frac
+    val_end   = train_end + gap + eff_span * val_frac
+
+    mask_train = d[time_col] <= train_end
+    mask_val   = (d[time_col] > train_end + gap) & (d[time_col] <= val_end)
+    mask_test  = d[time_col] > val_end + gap
+
+    train_df = d.loc[mask_train].copy()
+    val_df   = d.loc[mask_val].copy()
+    test_df  = d.loc[mask_test].copy()
+
+    summary = {
+        "time_col": time_col,
+        "dtype": str(d[time_col].dtype),
+        "time_min": tmin.isoformat(),
+        "train_last": train_end.isoformat(),
+        "val_last": val_end.isoformat(),
+        "time_max": tmax.isoformat(),
+        "gap_hours": gap_hours,
+        "rows_train": len(train_df),
+        "rows_val": len(val_df),
+        "rows_test": len(test_df),
+        "covid_excluded": covid_exclude is not None,
+        "covid_window": None if covid_exclude is None else (str(covid_start), str(covid_end)),
+    }
+    return train_df, val_df, test_df, summary
+
+
+
+def trainAll(force_refresh=False):
+    load_areas = sorted(getLoadAreaToZips().keys())
+    for load_area in load_areas:
+        trainRegion(load_area, force_refresh)
+
+
+
+def trainRegion(region_name, force_refresh=False):
+    csv_path = getCompleteDfFilePath(region_name)
+    model_path = getModelFilePath(region_name)
+    if os.path.exists(model_path) and not force_refresh:
+        print("Existing model for " + region_name + " found. Skipping...")
+        return
+    
+    print(f"\n=== Processing {region_name} from {csv_path} ===")
+    df = pd.read_csv(csv_path)
+    time_col = "datetime_beginning_ept"  # adjust if your main time col is different
+
+    if time_col in df.columns:
+        df[time_col] = pd.to_datetime(df[time_col])
+        df = df.sort_values(time_col).reset_index(drop=True)
+    
+    train_df, val_df, test_df, info = split_time_series_with_gaps_df(
+     df,
+     time_col="datetime_beginning_ept",
+     covid_exclude=("2020-03-15 00:00:00", "2020-06-30 23:59:59"),  # or None
+     train_frac=0.70,
+     val_frac=0.15,
+     gap_hours=168
+    )
+
+
+    # ---- Config (match your CSV) ----
+    TIME_COL = "datetime_beginning_ept"
+    Y_COL    = "mw"
+    TEMP_COL = "temp"
+
+    # Optional extras the CSV already had (only used if present)
+    OPTIONAL_NUMERIC = ["CDD", "HDD", "temp_rolling_24"]  # add more if you want
+    OPTIONAL_CATS    = [
+        "is_holiday", "is_weekend",
+        "blackFriday", "thanksgiving", "thanksgiving_eve",
+        "is_black_friday", "is_thanksgiving", "is_thanksgiving_eve"
+    ]
+
+    # ---- Helper: ensure calendar cols exist without overwriting yours ----
+    def ensure_calendar(d):
+        d = d.copy()
+        if "hour" not in d.columns:
+            d["hour"] = pd.to_datetime(d[TIME_COL]).dt.hour
+        # prefer existing 'dayofweek' if present
+        if "dow" not in d.columns:
+            if "dayofweek" in d.columns:
+                d["dow"] = d["dayofweek"].astype(int)
+            else:
+                d["dow"] = pd.to_datetime(d[TIME_COL]).dt.dayofweek
+        if "month" not in d.columns:
+            d["month"] = pd.to_datetime(d[TIME_COL]).dt.month
+        # cast known boolean-ish flags to bool if present
+        for c in OPTIONAL_CATS:
+            if c in d.columns:
+                d[c] = d[c].astype(bool)
+        return d
+
+    train_df = ensure_calendar(train_df)
+    val_df   = ensure_calendar(val_df)
+    test_df  = ensure_calendar(test_df)
+
+    # ---- Detect 24h-spaced lag columns
+    #      - mw:   72,96,120,144,168
+    #      - temp: 24,48,72,96,120,144,168
+    # ------------------------------------------
+    MW_LAG_HOURS   = tuple(range(72, 169, 24))  # (72, 96, 120, 144, 168)
+    TEMP_LAG_HOURS = tuple(range(24, 169, 24))  # (24, 48, 72, 96, 120, 144, 168)
+
+    def detect_lags(frame, base_name, allowed_hours):
+        pat = re.compile(rf"^{re.escape(base_name)}_lag_(\d+)$")
+        cols = []
+        for c in frame.columns:
+            m = pat.match(c)
+            if m:
+                h = int(m.group(1))
+                if h in allowed_hours:
+                    cols.append((h, c))
+        return [c for _, c in sorted(cols)]
+
+    # mw lags: only 72h and beyond
+    mw_lags   = detect_lags(train_df, Y_COL,   allowed_hours=MW_LAG_HOURS)
+    # temp lags: from 24h onward (24,48,...,168)
+    temp_lags = detect_lags(train_df, TEMP_COL, allowed_hours=TEMP_LAG_HOURS)
+
+    lag_block_cols = mw_lags + temp_lags
+
+    if not lag_block_cols:
+        raise ValueError(
+            "No suitable lag columns found. "
+            "Expected names like mw_lag_72, mw_lag_96, ..., and/or "
+            "temp_lag_24, temp_lag_48, ..., temp_lag_168."
+        )
+
+    # ---- HARD DROP: remove any rows with NaNs in lag columns + core vars ----
+    drop_cols = lag_block_cols + [Y_COL, TEMP_COL]
+
+    train_df = train_df.dropna(subset=drop_cols).copy()
+    val_df   = val_df.dropna(subset=drop_cols).copy()
+    test_df  = test_df.dropna(subset=drop_cols).copy()
+
+    print("\nAfter dropping NaNs from lags + core variables:")
+    print(f"  TRAIN rows: {train_df.shape[0]}")
+    print(f"  VAL rows:   {val_df.shape[0]}")
+    print(f"  TEST rows:  {test_df.shape[0]}")
+
+    # ---- Stage A: Elastic Net selection on lag blocks (TRAIN only) ----
+    sel_scaler = StandardScaler()
+    Xtrain_lags = sel_scaler.fit_transform(train_df[lag_block_cols].values)
+    ytrain      = train_df[Y_COL].values
+
+    enet = ElasticNetCV(
+        l1_ratio=[0.2, 0.4, 0.6],   # small, stable grid
+        alphas=None,                # search full path
+        cv=3,
+        max_iter=5000,
+        random_state=0
+    ).fit(Xtrain_lags, ytrain)
+
+    coef = enet.coef_
+    selected_idx = np.where(coef != 0)[0]
+    selected_lag_cols = [lag_block_cols[i] for i in selected_idx]
+
+    # Fallback if ENet is very ridge-y and selects nothing
+    if len(selected_lag_cols) == 0:
+        corr = train_df[lag_block_cols].corrwith(train_df[Y_COL]).abs().sort_values(ascending=False)
+        selected_lag_cols = list(corr.head(2).index)
+
+    print("Selected lag features:")
+    for c in selected_lag_cols:
+        print("  •", c)
+
+    # Categorical set (only those that are actually present)
+    base_cat = ["hour", "dow", "month"]
+    present_flags = [c for c in OPTIONAL_CATS if c in train_df.columns]
+    cat_cols = base_cat + present_flags
+
+    # Numeric set = target-hour weather + optional numeric extras (if present) + selected lags
+    num_base = [col for col in [TEMP_COL] + OPTIONAL_NUMERIC if col in train_df.columns]
+    num_cols = num_base + selected_lag_cols
+
+    # In case any optional numeric columns have NaNs, clean again on the exact feature set
+    needed_cols = cat_cols + num_cols + [Y_COL]
+    train_df_B = train_df.dropna(subset=needed_cols).copy()
+    val_df_B   = val_df.dropna(subset=needed_cols).copy()
+    test_df_B  = test_df.dropna(subset=needed_cols).copy()
+
+    print("\nAfter final NaN drop on all used features:")
+    print(f"  TRAIN (B) rows: {train_df_B.shape[0]}")
+    print(f"  VAL   (B) rows: {val_df_B.shape[0]}")
+    print(f"  TEST  (B) rows: {test_df_B.shape[0]}")
+
+    rf_pre = ColumnTransformer(
+    transformers=[
+        ("num", "passthrough", num_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+    ],
+    remainder="drop"
+    )
+
+    rf_model = Pipeline([
+        ("prep", rf_pre),
+        ("rf", RandomForestRegressor(
+            n_estimators=300,          # number of trees
+            max_depth=18,              # limit depth to reduce overfitting
+            min_samples_leaf=30,       # regularization; larger = smoother
+            n_jobs=-1,                 # use all cores
+            random_state=0,
+            oob_score=False            # can turn on if you want OOB estimates
+        ))
+    ])
+
+    # ---- Fit on TRAIN_B, evaluate on VAL_B ----
+    Xtr_rf = train_df_B[cat_cols + num_cols]
+    ytr_rf = train_df_B[Y_COL].values
+    Xva_rf = val_df_B[cat_cols + num_cols]
+    yva_rf = val_df_B[Y_COL].values
+
+    rf_model.fit(Xtr_rf, ytr_rf)
+    pred_val_rf = rf_model.predict(Xva_rf)
+    rmse_val_rf = np.sqrt(mean_squared_error(yva_rf, pred_val_rf))
+    print(f"\n[VAL] RMSE (Random Forest): {rmse_val_rf:0.3f}")
+
+    # Compare against naive baselines again for context
+    """for h in (72, 168):
+        r = baseline_rmse(val_df_B, h)
+        if r is not None:
+            print(f"[VAL] Naive-{h} RMSE: {r:0.3f}")"""
+
+    # ---- Refit on TRAIN_B + VAL_B, evaluate on TEST_B ----
+    trainval_df_rf = pd.concat([train_df_B, val_df_B], axis=0).sort_values(TIME_COL)
+    Xtva_rf = trainval_df_rf[cat_cols + num_cols]
+    ytva_rf = trainval_df_rf[Y_COL].values
+    Xte_rf  = test_df_B[cat_cols + num_cols]
+    yte_rf  = test_df_B[Y_COL].values
+
+    rf_model.fit(Xtva_rf, ytva_rf)
+    pred_test_rf = rf_model.predict(Xte_rf)
+    rmse_test_rf = np.sqrt(mean_squared_error(yte_rf, pred_test_rf))
+    print(f"\n[TEST] RMSE (Random Forest): {rmse_test_rf:0.3f}")
+
+    """for h in (72, 168):
+        r = baseline_rmse(test_df_B, h)
+        if r is not None:
+            print(f"[TEST] Naive-{h} RMSE: {r:0.3f}")"""
+
+    # ---- Quick feature importance summary (grouped) ----
+    # (RF importance is in the model's internal feature space; we map back to names)
+
+    rf_prep = rf_model.named_steps["prep"]
+    rf = rf_model.named_steps["rf"]
+
+    # Get feature names in the order RF sees them
+    num_feature_names_rf = list(num_cols)
+
+    cat_encoder_rf = rf_prep.named_transformers_["cat"]
+    cat_feature_names_rf = []
+    for col_name, cats in zip(cat_cols, cat_encoder_rf.categories_):
+        for cat in cats:
+            cat_feature_names_rf.append(f"{col_name}={cat}")
+
+    full_feature_names_rf = num_feature_names_rf + cat_feature_names_rf
+
+    importances = rf.feature_importances_
+    rf_imp_df = pd.DataFrame({
+        "feature": full_feature_names_rf,
+        "importance": importances
+    }).sort_values("importance", ascending=False)
+
+    print("\nTop 20 Random Forest feature importances:")
+    print(rf_imp_df.head(20).to_string(index=False))
+
+    # Group by original feature (sum importance over its dummies)
+    rf_group_imp = (
+        rf_imp_df
+        .assign(group=lambda df: df["feature"].str.replace(r"=.*", "", regex=True))
+        .groupby("group")["importance"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    print("\nGroup-wise Random Forest feature importances:")
+    print(rf_group_imp.to_string())
+    # ----------------------------------------------------
+    # 1. Your existing preprocessing + split code goes here
+    #    It should define:
+    #      - train_df_B, val_df_B, test_df_B
+    #      - cat_cols, num_cols
+    #      - ridge_hourly_model (fitted)
+    #      - rf_hourly_model    (fitted)
+    # ----------------------------------------------------
+    #
+    # Example outline (you already have the detailed version):
+    #
+    # df = ensure_calendar(df)
+    # df = create_lags(df)  # however you built mw_lag_*, temp_lag_* etc.
+    # train_df, val_df, test_df = time_based_split(df)
+    # ... ENet feature selection ...
+    # train_df_B, val_df_B, test_df_B = drop_nans_on_needed_features(...)
+    # ridge_hourly_model.fit(train_df_B[cat_cols + num_cols], train_df_B[Y_COL])
+    # rf_hourly_model.fit(train_df_B[cat_cols + num_cols], train_df_B[Y_COL])
+    #
+    # ----------------------------------------------------
+
+    # 2. Save RF "weights" for this region
+    prefix = f"models/{region_name}"
+
+    save_rf_weights_pickle(rf_model, cat_cols, num_cols, prefix)
+
+    print(f"Saved rf weights for {region_name} under prefix '{prefix}_*'")
