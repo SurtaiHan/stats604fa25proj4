@@ -1059,7 +1059,8 @@ def generateHeader(n_load_areas):
     header_list = L_columns + PH_columns + PD_columns
 
     # --- 5. Join the list into a single comma-separated string ---
-    csv_header_string = ", ".join(header_list)
+    csv_header_string = "date" + ", ".join(header_list)
+
     return csv_header_string
 
 def predictAll():
@@ -1077,7 +1078,11 @@ def predictAll():
             peak_day_flags.append(peak_day_flag)
 
     header_str = generateHeader(len(load_areas))
-    final_str = ",".join(str(v) for v in hourly_preds)
+    tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
+    date_str = tomorrow.strftime("%Y-%m-%d")
+    final_str = date_str + ","
+
+    final_str += ",".join(str(v) for v in hourly_preds)
     final_str += ","
     final_str += ",".join(str(v) for v in peak_hours)
     final_str += ","
