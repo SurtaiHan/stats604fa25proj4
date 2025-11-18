@@ -1059,7 +1059,7 @@ def generateHeader(n_load_areas):
     header_list = L_columns + PH_columns + PD_columns
 
     # --- 5. Join the list into a single comma-separated string ---
-    csv_header_string = "date" + ", ".join(header_list)
+    csv_header_string = "date," + ", ".join(header_list)
 
     return csv_header_string
 
