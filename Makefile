@@ -21,7 +21,7 @@ analyses:
 .PHONY: predictions
 predictions:
 #	@echo "Running python main.py predictions"
-	python main.py predictions
+	@python main.py predictions
 
 # -------------------------------
 # Download raw data (delete existing raw data first)

@@ -9,6 +9,7 @@ import datetime
 import pathlib
 import holidays
 import zoneinfo
+import warnings
 
 import pickle
 import matplotlib.pyplot as plt
@@ -570,14 +571,6 @@ def split_time_series_with_gaps_df(
     return train_df, val_df, test_df, summary
 
 
-
-def trainAll(force_refresh=False):
-    load_areas = sorted(getLoadAreaToZips().keys())
-    for load_area in load_areas:
-        trainRegion(load_area, force_refresh)
-
-
-
 def trainRegion(region_name, force_refresh=False):
     csv_path = getCompleteDfFilePath(region_name)
     model_path = getModelFilePath(region_name)
@@ -847,3 +840,248 @@ def trainRegion(region_name, force_refresh=False):
     save_rf_weights_pickle(rf_model, cat_cols, num_cols, prefix)
 
     print(f"Saved rf weights for {region_name} under prefix '{prefix}_*'")
+
+
+
+
+
+def trainAll(force_refresh=False):
+    load_areas = sorted(getLoadAreaToZips().keys())
+    for load_area in load_areas:
+        trainRegion(load_area, force_refresh)
+
+
+
+
+
+TIME_COL      = "datetime_beginning_ept"
+LOAD_AREA_COL = "load_area"
+MODELS_DIR    = "models"
+
+
+def load_rf_model_for_zone(zone_name, base_dir=MODELS_DIR):
+    path = os.path.join(base_dir, f"{zone_name}_rf_model.pkl")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"RF model not found at: {path}")
+    with open(path, "rb") as f:
+        model = pickle.load(f)
+    return model
+
+
+def get_feature_cols_from_pipeline(pipeline):
+    prep = pipeline.named_steps["prep"]
+    num_cols = list(prep.transformers_[0][2])
+    cat_cols = list(prep.transformers_[1][2])
+    return num_cols, cat_cols
+
+
+def ensure_calendar_like_training(df):
+    """
+    Make test_df look like the training data w.r.t calendar cols:
+      - ensure TIME_COL is datetime
+      - create hour if missing
+      - create dow if missing (prefer 'dayofweek' if present)
+      - create month if missing
+    """
+    d = df.copy()
+    d[TIME_COL] = pd.to_datetime(d[TIME_COL])
+
+    if "hour" not in d.columns:
+        d["hour"] = d[TIME_COL].dt.hour
+
+    if "dow" not in d.columns:
+        if "dayofweek" in d.columns:
+            d["dow"] = d["dayofweek"].astype(int)
+        else:
+            d["dow"] = d[TIME_COL].dt.dayofweek
+
+    if "month" not in d.columns:
+        d["month"] = d[TIME_COL].dt.month
+
+    return d
+
+
+def impute_mw_lags(df, used_num_cols):
+    """
+    For any columns named mw_lag_<number> that are actually used in num_cols,
+    forward-fill missing values from the last available value.
+    """
+    d = df.copy()
+    lag_cols = [c for c in used_num_cols if re.match(r"^mw_lag_\d+$", c)]
+    for col in lag_cols:
+        if col in d.columns:
+            d[col] = d[col].ffill().bfill()
+    return d
+
+
+def impute_other_features(df, num_cols, cat_cols):
+    """
+    Impute remaining NaNs in used numeric and categorical feature columns,
+    without dropping any rows.
+    """
+    d = df.copy()
+
+    # Numeric features: simple strategy = forward-fill, then back-fill, then median
+    for col in num_cols:
+        if col not in d.columns:
+            continue
+        if d[col].isna().any():
+            # ffill/bfill first (time-structure-friendly)
+            d[col] = d[col].ffill().bfill()
+            # If still NaNs (all values were NaN), fill with overall median or 0
+            if d[col].isna().any():
+                median_val = d[col].median()
+                if np.isnan(median_val):
+                    median_val = 0.0
+                d[col] = d[col].fillna(median_val)
+
+    # Categorical features: fill NaNs with a placeholder
+    for col in cat_cols:
+        if col not in d.columns:
+            continue
+        if d[col].isna().any():
+            d[col] = d[col].fillna("missing")
+
+    return d
+
+
+def build_single_zone_line(current_date_str, test_df, output_txt_path, verbose=False):
+    """
+    current_date_str : "YYYY-MM-DD" (submission date)
+    test_df          : 24-row DataFrame for ONE zone and ONE target date.
+    output_txt_path  : where to write: "YYYY-MM-DD", L_00..L_23, PH, PD
+
+    Steps:
+      - infer zone from load_area
+      - load correct RF model
+      - ensure calendar cols (hour, dow, month)
+      - drop columns not used by the model
+      - impute mw_lag_* used by the model
+      - impute remaining NaNs in used num/cat features
+      - predict 24 loads, compute peak hour + peak-day flag
+    """
+
+    # 1) Calendar fix
+    df = ensure_calendar_like_training(test_df)
+
+    # 2) Zone + target date checks
+    zones = df[LOAD_AREA_COL].unique()
+    if len(zones) != 1:
+        raise ValueError(f"Expected exactly 1 zone in {LOAD_AREA_COL}, got {len(zones)}: {zones}")
+    zone_name = zones[0]
+    if verbose:
+        print(f"Detected zone: {zone_name}")
+
+    df[TIME_COL] = pd.to_datetime(df[TIME_COL])
+    target_dates = df[TIME_COL].dt.date.unique()
+    if len(target_dates) != 1:
+        raise ValueError(
+            f"Expected exactly 1 target date in test_df, got {len(target_dates)}: {target_dates}"
+        )
+    target_date = target_dates[0]
+    if verbose:
+        print(f"Target date for this zone: {target_date}")
+
+    # 3) Load model & get feature columns
+    rf_model = load_rf_model_for_zone(zone_name)
+    num_cols, cat_cols = get_feature_cols_from_pipeline(rf_model)
+
+    # 4) Drop columns that are not used in prediction (keep only needed + minimal meta)
+    keep_cols = set([TIME_COL, LOAD_AREA_COL, "hour", "dow", "month"]) | set(num_cols) | set(cat_cols)
+    df = df[[c for c in df.columns if c in keep_cols]].copy()
+
+    # 5) Impute mw_lag_* that are actually used by the model
+    df = impute_mw_lags(df, num_cols)
+
+    # 6) Impute any remaining NaNs in the used features (num + cat)
+    df = impute_other_features(df, num_cols, cat_cols)
+
+    # 7) Build design matrix and predict
+    X = df[cat_cols + num_cols]
+    preds = rf_model.predict(X)
+
+    # Sort by hour so L_00..L_23 are in order
+    tmp = pd.DataFrame({
+        "hour": df["hour"].values,
+        "pred": preds
+    }).sort_values("hour")
+
+    preds_sorted = tmp["pred"].values
+    loads_rounded = np.rint(preds_sorted).astype(int)
+
+    # 8) Task 2: peak hour (0..23)
+    peak_hour = int(np.argmax(preds_sorted))
+
+    # 9) Task 3: very simple baseline for peak day
+    if (target_date.month == 11) and (target_date.day in (24, 25, 26)):
+        peak_day_flag = 1
+    else:
+        peak_day_flag = 0
+
+    # 10) Assemble and write line
+    values = [current_date_str] + loads_rounded.tolist() + [peak_hour, peak_day_flag]
+    line = ",".join(str(v) for v in values)
+
+    with open(output_txt_path, "w") as f:
+        f.write(line + "\n")
+
+    if verbose:
+        print(f"Wrote single-zone line for {zone_name} to {output_txt_path}")
+        print("Line content:")
+        print(line)
+    return (loads_rounded.tolist(), peak_hour, peak_day_flag)
+
+
+def predictLoadArea(load_area):
+    # ------------------ EXAMPLE USAGE ------------------ #
+    test_df = getPredictionFeatures(load_area)
+    tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
+    date_str = tomorrow.strftime("%Y-%m-%d")
+    output_path = load_area + "_" + date_str + ".txt"
+    return build_single_zone_line(date_str, test_df, output_path)
+
+def generateHeader(n_load_areas):
+    # --- 1. Generate L_i_j Columns
+    L_columns = []
+    for i in range(1, n_load_areas+1):
+        # j runs from 0 to 23 (00 to 23)
+        # The format code {:02d} ensures the number is zero-padded to two digits (e.g., 5 becomes 05)
+        L_columns.extend([f"L{i}_{j:02d}" for j in range(24)])
+
+    # --- 2. Generate PH_i Columns
+    PH_columns = [f"PH_{i}" for i in range(1, n_load_areas+1)]
+
+    # --- 3. Generate PD_i Columns
+    PD_columns = [f"PD_{i}" for i in range(1, n_load_areas+1)]
+
+    # --- 4. Combine all columns into a single list ---
+    # The order is L_columns, then PH_columns, then PD_columns
+    header_list = L_columns + PH_columns + PD_columns
+
+    # --- 5. Join the list into a single comma-separated string ---
+    csv_header_string = ", ".join(header_list)
+    return csv_header_string
+
+def predictAll():
+    load_areas = sorted(getLoadAreaToZips().keys())
+    hourly_preds = []
+    peak_hours = []
+    peak_day_flags = []
+    with warnings.catch_warnings():
+        # 1. Temporarily set the filter to ignore ALL warnings (or specific ones)
+        warnings.filterwarnings("ignore")
+        for load_area in load_areas:
+            hourly_pred, peak_hour, peak_day_flag = predictLoadArea(load_area)
+            hourly_preds = hourly_preds + hourly_pred
+            peak_hours.append(peak_hour)
+            peak_day_flags.append(peak_day_flag)
+
+    header_str = generateHeader(len(load_areas))
+    final_str = ",".join(str(v) for v in hourly_preds)
+    final_str += ","
+    final_str += ",".join(str(v) for v in peak_hours)
+    final_str += ","
+    final_str += ",".join(str(v) for v in peak_day_flags)
+
+    print(header_str)
+    print(final_str)

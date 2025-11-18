@@ -81,8 +81,7 @@ def run_train():
 def run_predictions():
     # Note that this method is sensitive because it must only output
     # the specific sequence described in the spec
-    #my_utils.predictAll()
-    pass
+    my_utils.predictAll()
     
 def run_rawdata():
     print("Running make rawdata...")
