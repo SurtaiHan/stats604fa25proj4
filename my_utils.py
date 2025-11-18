@@ -1035,7 +1035,7 @@ def build_single_zone_line(current_date_str, test_df, output_txt_path, verbose=F
 
     if verbose:
         with open(output_txt_path, "w") as f:
-        f.write(line + "\n")
+            f.write(line + "\n")
         print(f"Wrote single-zone line for {zone_name} to {output_txt_path}")
         print("Line content:")
         print(line)
